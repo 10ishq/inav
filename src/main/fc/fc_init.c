@@ -85,6 +85,7 @@
 #include "io/pwmdriver_i2c.h"
 #include "io/osd.h"
 #include "io/displayport_msp.h"
+#include "io/uav_interconnect.h"
 
 #include "msp/msp_serial.h"
 
@@ -528,12 +529,17 @@ void init(void)
     cmsDisplayPortRegister(displayPortMspInit());
 #endif
 
+#ifdef USE_UAV_INTERCONNECT
+    uavInterconnectInit();
+#endif
+
 #ifdef GPS
     if (feature(FEATURE_GPS)) {
         gpsInit();
         addBootlogEvent2(BOOT_EVENT_GPS_INIT_DONE, BOOT_EVENT_FLAGS_NONE);
     }
 #endif
+
 
 #ifdef NAV
     navigationInit();

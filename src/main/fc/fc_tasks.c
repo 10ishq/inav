@@ -54,6 +54,7 @@
 #include "io/osd.h"
 #include "io/pwmdriver_i2c.h"
 #include "io/serial.h"
+#include "io/uav_interconnect.h"
 
 #include "msp/msp_serial.h"
 
@@ -326,6 +327,9 @@ void fcTasksInit(void)
     setTaskEnabled(TASK_CMS, feature(FEATURE_OSD) || feature(FEATURE_DASHBOARD));
 #endif
 #endif
+#ifdef USE_UAV_INTERCONNECT
+    setTaskEnabled(TASK_UAV_INTERCONNECT, uavInterconnectIsInitialized());
+#endif
 }
 
 cfTask_t cfTasks[TASK_COUNT] = {
@@ -516,6 +520,15 @@ cfTask_t cfTasks[TASK_COUNT] = {
         .taskFunc = cmsHandler,
         .desiredPeriod = 1000000 / 60,          // 60 Hz
         .staticPriority = TASK_PRIORITY_LOW,
+    },
+#endif
+
+#ifdef USE_UAV_INTERCONNECT
+    [TASK_UAV_INTERCONNECT] = {
+        .taskName = "UIB",
+        .taskFunc = uavInterconnectTask,
+        .desiredPeriod = 1000000 / 200,          // 200 Hz
+        .staticPriority = TASK_PRIORITY_MEDIUM,
     },
 #endif
 };
