@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include <ctype.h>
 #include <math.h>
+#include <string.h>
 
 #include "platform.h"
 #include "build/build_config.h"
@@ -42,14 +43,20 @@
 
 
 typedef enum {
-    UAV_COMMAND_IDENTIFY    = 0x00,
-    UAV_COMMAND_READ        = 0x40,
-    UAV_COMMAND_WRITE       = 0x80,
-    UAV_COMMAND_EXTENDED    = 0xC0,
+    UIB_COMMAND_IDENTIFY    = 0x00,
+    UIB_COMMAND_READ        = 0x40,
+    UIB_COMMAND_WRITE       = 0x80,
+    UIB_COMMAND_EXTENDED    = 0xC0,
 } uavInterconnectCommand_e;
 
-#define UAV_INTERCONNECT_MAX_SLOTS  64
-#define UIB_BIT_RATE            128000
+typedef enum {
+    UIB_FLAG_HAS_READ       = (1 << 0),     // Device supports READ command (sensor)
+    UIB_FLAG_HAS_WRITE      = (1 << 1),     // Device supports WRITE command (sensor configuration or executive device)
+} uibDeviceFlags_e;
+
+#define UIB_MAX_DEVICES         256
+#define UIB_MAX_SLOTS           16
+#define UIB_BIT_RATE            115200
 #define UIB_PORT_OPTIONS        (SERIAL_NOT_INVERTED | SERIAL_STOPBITS_1 | SERIAL_PARITY_NO | SERIAL_UNIDIR)
 #define UIB_PACKET_SIZE         16
 
@@ -79,7 +86,8 @@ typedef enum {
 static serialPort_t *           busPort;
 static bool                     uibInitialized = false;
 
-static uavInterconnectSlot_t    slots[UAV_INTERCONNECT_MAX_SLOTS];
+static uavInterconnectSlot_t *  devices[UIB_MAX_DEVICES];
+static uavInterconnectSlot_t    slots[UIB_MAX_SLOTS];
 static timeUs_t                 slotStartTimeUs;
 static uavInterconnectState_t   busState = STATE_INITIALIZE;
 
@@ -98,20 +106,6 @@ static void switchState(uavInterconnectState_t newState)
     busState = newState;
 }
 
-static void sendCommand(timeUs_t currentTimeUs, uavInterconnectCommand_e command, uint8_t slot, uint8_t * buf, int size)
-{
-    slotStartTimeUs = currentTimeUs;
-    serialWrite(busPort, command | slot);
-    serialWriteBuf(busPort, buf, size);
-}
-
-static void sendDiscover(timeUs_t currentTimeUs, uint8_t slot, uint8_t devId)
-{
-    uint8_t buf[2] = { UAV_COMMAND_IDENTIFY | slot, devId };
-    slotStartTimeUs = currentTimeUs;
-    serialWriteBuf(busPort, buf, 2);
-}
-
 static uint8_t uavCalculateCRC(uint8_t * buf, int size)
 {
     uint8_t crc = 0x00;
@@ -121,9 +115,51 @@ static uint8_t uavCalculateCRC(uint8_t * buf, int size)
     return crc;
 }
 
+static void sendDiscover(timeUs_t currentTimeUs, uint8_t slot, uint8_t devId)
+{
+    uint8_t buf[3];
+    buf[0] = UIB_COMMAND_IDENTIFY | slot;
+    buf[1] = devId;
+    buf[2] = uavCalculateCRC(&buf[0], 2);
+    slotStartTimeUs = currentTimeUs;
+    serialWriteBuf(busPort, buf, 3);
+/*
+    uint8_t buf[8];
+    buf[0] = UIB_COMMAND_IDENTIFY | slot;
+    buf[1] = devId;
+    buf[2] = uavCalculateCRC(&buf[0], 2);
+    buf[3] = 0x00;
+    buf[4] = 0x64;
+    buf[5] = 0x00;
+    buf[6] = UIB_FLAG_HAS_READ | UIB_FLAG_HAS_WRITE;
+    buf[7] = uavCalculateCRC(&buf[0], 7);
+    slotStartTimeUs = currentTimeUs;
+    serialWriteBuf(busPort, buf, 8);
+*/
+}
+
+static void sendRead(timeUs_t currentTimeUs, uint8_t slot)
+{
+    uint8_t buf[2];
+    buf[0] = UIB_COMMAND_READ | slot;
+    buf[1] = uavCalculateCRC(&buf[0], 1);
+    slotStartTimeUs = currentTimeUs;
+    serialWriteBuf(busPort, buf, 2);
+}
+
+static void sendWrite(timeUs_t currentTimeUs, uint8_t slot, uint8_t * data)
+{
+    uint8_t buf[UIB_PACKET_SIZE + 2];
+    buf[0] = UIB_COMMAND_WRITE | slot;
+    memcpy(&buf[1], data, UIB_PACKET_SIZE);
+    buf[UIB_PACKET_SIZE + 1] = uavCalculateCRC(&buf[0], UIB_PACKET_SIZE + 1);
+    slotStartTimeUs = currentTimeUs;
+    serialWriteBuf(busPort, buf, UIB_PACKET_SIZE + 2);
+}
+
 static int uavInterconnectFindEmptySlot(void)
 {
-    for (int i = 0; i < UAV_INTERCONNECT_MAX_SLOTS; i++) {
+    for (int i = 0; i < UIB_MAX_SLOTS; i++) {
         if (!slots[i].allocated)
             return i;
     }
@@ -139,23 +175,32 @@ static void uavInterconnectProcessSlot(timeUs_t currentTimeUs)
 
     // CRC is calculated over the whole slot, including command byte(s) sent by FC. This ensures integrity of the transaction as a whole
     switch (cmd) {
-        // Identify command (7 bytes)
-        //      FC:     IDENTIFY[1] + DevID[1]
-        //      DEV:    PollInterval[2] + Flags[2] + CRC[1]
-        case UAV_COMMAND_IDENTIFY:
-            if (slotDataBufferCount == 7) {
-                if (uavCalculateCRC(&slotDataBuffer[0], 6) == slotDataBuffer[6]) {
+        // Identify command (8 bytes)
+        //      FC:     IDENTIFY[1] + DevID[1] + CRC1[1]
+        //      DEV:    PollInterval[2] + Flags[2] + CRC2[1]
+        case UIB_COMMAND_IDENTIFY:
+            if (slotDataBufferCount == 8) {
+                if (uavCalculateCRC(&slotDataBuffer[0], 7) == slotDataBuffer[7]) {
                     // CRC valid - process valid IDENTIFY slot
                     slots[slot].allocated = true;
                     slots[slot].rxDataReady = false;
                     slots[slot].txDataReady = false;
                     slots[slot].deviceAddress = slotDataBuffer[1];
-                    slots[slot].deviceFlags = slotDataBuffer[4] << 8 | slotDataBuffer[5];
-                    slots[slot].pollIntervalUs = (slotDataBuffer[2] << 8 | slotDataBuffer[3]) * 1000;
+                    slots[slot].deviceFlags = slotDataBuffer[5] << 8 | slotDataBuffer[6];
+                    slots[slot].pollIntervalUs = (slotDataBuffer[3] << 8 | slotDataBuffer[4]) * 1000;
                     slots[slot].lastPollTimeUs = currentTimeUs;
+
+                    // Save pointer to slot to be able to address device by DevID internally
+                    devices[slots[slot].deviceAddress] = &slots[slot];
+                    
+                    debug[1]++;
+                    debug[2] = slots[slot].deviceAddress;
 
                     // Find next slot for discovery process
                     discoverySlot = uavInterconnectFindEmptySlot();
+                }
+                else {
+                    debug[3]++;
                 }
 
                 // Regardless of CRC validity - discard buffer data
@@ -164,22 +209,82 @@ static void uavInterconnectProcessSlot(timeUs_t currentTimeUs)
             break;
 
         // Read command (18 bytes)
-        //      FC:     READ[1]
-        //      DEV:    Data[16] + CRC[1]
-        case UAV_COMMAND_READ:
-            if (slotDataBufferCount == (UIB_PACKET_SIZE + 2)) {
-                if (uavCalculateCRC(&slotDataBuffer[0], UIB_PACKET_SIZE + 1) == slotDataBuffer[UIB_PACKET_SIZE + 1]) {
+        //      FC:     READ[1] + CRC1[1]
+        //      DEV:    Data[16] + CRC2[1]
+        case UIB_COMMAND_READ:
+            if (slotDataBufferCount == (UIB_PACKET_SIZE + 3)) {
+                if (uavCalculateCRC(&slotDataBuffer[0], UIB_PACKET_SIZE + 2) == slotDataBuffer[UIB_PACKET_SIZE + 2]) {
                     // CRC valid - process valid READ slot
-                    // TODO
+                    // Check if this slot has read capability and is allocated
+                    if (slots[slot].allocated && (slots[slot].deviceFlags & UIB_FLAG_HAS_READ) && !slots[slot].rxDataReady) {
+                        memcpy(slots[slot].rxPacket, &slotDataBuffer[2], UIB_PACKET_SIZE);
+                        slots[slot].rxDataReady = true;
+                    }
                 }
 
                 // Regardless of CRC validity - discard buffer data
                 slotDataBufferCount = 0;
             }
             break;
-            
+
+        // Write command (18 bytes)
+        //      FC:     WRITE[1] + Data[16] + CRC1[1]
+        //      DEV:    ACK[1] + CRC2[1]
+        case UIB_COMMAND_WRITE:
+            if (slotDataBufferCount == (UIB_PACKET_SIZE + 4)) {
+                // Don't check for CRC at the moment - just receive the packet
+                // Regardless of CRC validity - discard buffer data
+                slotDataBufferCount = 0;
+            }
+            break;
+
         default:
             break;
+    }
+}
+
+static void uibProcessScheduledTransactions(timeUs_t currentTimeUs)
+{
+    int slotPrio = 0x100;
+    int slotId = -1;
+
+    // First - find device with highest priority that has the READ capability and is scheduled for READ
+    for (int i = 0; i < UIB_MAX_SLOTS; i++) {
+        if (!slots[i].allocated) 
+            continue;
+
+        if ((slots[i].deviceFlags & UIB_FLAG_HAS_READ) && ((currentTimeUs - slots[i].lastPollTimeUs) >= slots[i].pollIntervalUs) && (slotPrio > slots[i].deviceAddress)) {
+            slotId = i;
+            slotPrio = slots[i].deviceAddress;
+        }
+    }
+
+    // READ command
+    if (slotId >= 0) {
+        sendRead(currentTimeUs, slotId);
+        slots[slotId].lastPollTimeUs = currentTimeUs;
+        return;
+    }
+
+    // No READ command executed - check if we have data to WRITE
+    slotPrio = 0x100;
+    slotId = -1;
+
+    for (int i = 0; i < UIB_MAX_SLOTS; i++) {
+        if (!slots[i].allocated) 
+            continue;
+
+        if (slots[i].txDataReady && (slots[i].deviceFlags & UIB_FLAG_HAS_WRITE) && (slotPrio > slots[i].deviceAddress)) {
+            slotId = i;
+            slotPrio = slots[i].deviceAddress;
+        }
+    }
+
+    // WRITE command
+    if (slotId >= 0) {
+        sendWrite(currentTimeUs, slotId, slots[slotId].txPacket);
+        slots[slotId].txDataReady = false;
+        return;
     }
 }
 
@@ -228,6 +333,7 @@ void uavInterconnectTask(timeUs_t currentTimeUs)
         case STATE_DISCOVER:
             if (discoverySlot >= 0) {
                 sendDiscover(currentTimeUs, discoverySlot, discoveryAddress);
+                debug[0]++;
 
                 if (discoveryAddress == 0xFF) {
                     // All addresses have been polled
@@ -240,18 +346,28 @@ void uavInterconnectTask(timeUs_t currentTimeUs)
             }
             else {
                 // All slots are allocated - can't discover more devices
+                discoverySlot = 0;
+                discoveryAddress = 0;
                 switchState(STATE_IDLE);
             }
             break;
 
         case STATE_IDLE:
-            // Find highest priority device and read it
+            // Find highest priority device and read/write it
+            // If no device is ready to be polled at the moment:
+            // issue IDENTIFY command for one of the existing devices. This will allow re-discovery of 
+            // temporary disconnected devices (due to device intermittent failure)
+            uibProcessScheduledTransactions(currentTimeUs);
             break;
     }
 }
 
 void uavInterconnectInit(void)
 {
+    for (int i = 0; i < UIB_MAX_DEVICES; i++) {
+        devices[i] = NULL;
+    }
+
     serialPortConfig_t * portConfig = findSerialPortConfig(FUNCTION_UAV_INTERCONNECT);
     if (!portConfig)
         return;
@@ -267,6 +383,42 @@ void uavInterconnectInit(void)
 bool uavInterconnectIsInitialized(void)
 {
     return uibInitialized;
+}
+
+bool uavInterconnect_DeviceDetected(uint8_t devId)
+{
+    if (!devices[devId])
+        return false;
+
+    return devices[devId]->allocated;
+}
+
+timeUs_t uavInterconnect_GetPollRateUs(uint8_t devId)
+{
+    if (!devices[devId])
+        return 0;
+
+    return devices[devId]->pollIntervalUs;
+}
+
+bool uavInterconnect_DataAvailable(uint8_t devId)
+{
+    if (!devices[devId])
+        return false;
+
+    return devices[devId]->rxDataReady;
+}
+
+bool uavInterconnect_Read(uint8_t devId, uint8_t * buffer)
+{
+    if (!devices[devId])
+        return false;
+
+    if (!devices[devId]->rxDataReady)
+        return false;
+
+    memcpy(buffer, devices[devId]->rxPacket, UIB_PACKET_SIZE);
+    return true;
 }
 
 #endif
