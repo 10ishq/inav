@@ -242,8 +242,6 @@ static void uavInterconnectProcessSlot(timeUs_t currentTimeUs)
                         memcpy(slots[slot].rxPacket, &slotDataBuffer[2], UIB_PACKET_SIZE);
                         slots[slot].rxDataReady = true;
                     }
-
-                    debug[3] = slotDataBuffer[2];
                 }
                 else {
                     uibStats.failedCRC++;
@@ -399,9 +397,11 @@ void uavInterconnectTask(timeUs_t currentTimeUs)
             break;
     }
 
+    /*
     debug[0] = uibStats.sentCommands;
     debug[1] = uibStats.discoveredDevices;
     debug[2] = uibStats.failedCRC;
+    */
 }
 
 void uavInterconnectInit(void)
