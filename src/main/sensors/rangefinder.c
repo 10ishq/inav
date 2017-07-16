@@ -48,6 +48,8 @@
 
 #include "scheduler/scheduler.h"
 
+#include "uav_interconnect/uav_interconnect.h"
+
 rangefinder_t rangefinder;
 
 #define RANGEFINDER_HARDWARE_TIMEOUT_MS         500     // Accept 500ms of non-responsive sensor, report HW failure otherwise
@@ -78,7 +80,9 @@ const rangefinderHardwarePins_t * rangefinderGetHardwarePins(void)
     rangefinderHardwarePins.triggerTag = IO_TAG(RANGEFINDER_HCSR04_TRIGGER_PIN);
     rangefinderHardwarePins.echoTag = IO_TAG(RANGEFINDER_HCSR04_ECHO_PIN);
 #else
-#error Rangefinder not defined for target
+    // No Trig/Echo hardware rangefinder
+    rangefinderHardwarePins.triggerTag = IO_TAG(NONE);
+    rangefinderHardwarePins.echoTag = IO_TAG(NONE);
 #endif
     return &rangefinderHardwarePins;
 }
@@ -113,6 +117,15 @@ static bool rangefinderDetect(rangefinderDev_t * dev, uint8_t rangefinderHardwar
 #endif
             break;
 
+        case RANGEFINDER_UIB:
+#ifdef USE_UAV_INTERCONNECT
+            if (uibRangefinderDetect(dev)) {
+                rangefinderHardware = RANGEFINDER_UIB;
+                rescheduleTask(TASK_RANGEFINDER, TASK_PERIOD_MS(RANGEFINDER_UIB_TASK_PERIOD_MS));
+            }
+#endif
+            break;
+
         case RANGEFINDER_NONE:
             rangefinderHardware = RANGEFINDER_NONE;
             break;
@@ -136,7 +149,7 @@ bool rangefinderInit(void)
         return false;
     }
 
-    rangefinder.dev.init();
+    rangefinder.dev.init(&rangefinder.dev);
     rangefinder.rawAltitude = RANGEFINDER_OUT_OF_RANGE;
     rangefinder.calculatedAltitude = RANGEFINDER_OUT_OF_RANGE;
     rangefinder.maxTiltCos = cos_approx(DECIDEGREES_TO_RADIANS(rangefinder.dev.detectionConeExtendedDeciDegrees / 2.0f));
@@ -169,7 +182,7 @@ static int32_t applyMedianFilter(int32_t newReading)
 timeDelta_t rangefinderUpdate(void)
 {
     if (rangefinder.dev.update) {
-        rangefinder.dev.update();
+        rangefinder.dev.update(&rangefinder.dev);
     }
 
     return rangefinder.dev.delayMs * 1000;  // to microseconds
@@ -181,7 +194,7 @@ timeDelta_t rangefinderUpdate(void)
 int32_t rangefinderRead(void)
 {
     if (rangefinder.dev.read) {
-        const int32_t distance = rangefinder.dev.read();
+        const int32_t distance = rangefinder.dev.read(&rangefinder.dev);
         if (distance >= 0) {
             rangefinder.lastValidResponseTimeMs = millis();
             rangefinder.rawAltitude = applyMedianFilter(distance);

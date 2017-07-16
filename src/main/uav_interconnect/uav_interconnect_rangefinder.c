@@ -50,16 +50,24 @@ typedef union __attribute__((packed))  {
     uint8_t rawData[UIB_PACKET_SIZE];
     rangefinderData_t rangefinder;
 } uibDataPacket_t;
-  
+
 static int32_t lastCalculatedDistance = RANGEFINDER_OUT_OF_RANGE;
 static uibDataPacket_t uibData;
 
-static void uibRangefinderInit(void)
+static void uibRangefinderInit(rangefinderDev_t *dev)
 {
+    UNUSED(dev);
 }
 
-static uibRangefinderUpdate(void)
+static void uibRangefinderUpdate(rangefinderDev_t *dev)
 {
+    UNUSED(dev);
+
+    if (!uavInterconnectBusIsInitialized()) {
+        lastCalculatedDistance = RANGEFINDER_HARDWARE_FAILURE;
+        return;
+    }
+
     // If bus didn't detect the yet - report failure
     if (!uibDeviceDetected(UIB_DEVICE_ADDRESS)) {
         lastCalculatedDistance = RANGEFINDER_HARDWARE_FAILURE;
@@ -73,12 +81,14 @@ static uibRangefinderUpdate(void)
     }
 
     if (uibDataAvailable(UIB_DEVICE_ADDRESS)) {
-        uibRead(UIB_DEVICE_ADDRESS, &uibData);
+        uibRead(UIB_DEVICE_ADDRESS, (uint8_t*)&uibData);
+
         if (!(uibData.rangefinder.flags & UIB_DATA_NEW))
             return;
 
         if (uibData.rangefinder.flags & UIB_DATA_VALID) {
-            lastCalculatedDistance = distanceCm;
+            lastCalculatedDistance = uibData.rangefinder.distanceCm;
+            dev->delayMs = uibGetPollRateUs(UIB_DEVICE_ADDRESS) / 1000;
         }
         else {
             lastCalculatedDistance = RANGEFINDER_OUT_OF_RANGE;
@@ -86,17 +96,16 @@ static uibRangefinderUpdate(void)
     }
 }
 
-static int32_t uibRangefinderGetDistance(void)
+static int32_t uibRangefinderGetDistance(rangefinderDev_t *dev)
 {
+    UNUSED(dev);
     return lastCalculatedDistance;
 }
 
 bool uibRangefinderDetect(rangefinderDev_t *dev)
 {
-    if (!uavInterconnectBusIsInitialized())
-        return false;
-
-    dev->delayMs = 100;
+    // This always succeed
+    dev->delayMs = RANGEFINDER_UIB_TASK_PERIOD_MS;
     dev->maxRangeCm = RANGEFINDER_MAX_RANGE_CM;
     dev->detectionConeDeciDegrees = RANGEFINDER_DETECTION_CONE_DECIDEGREES;
     dev->detectionConeExtendedDeciDegrees = RANGEFINDER_DETECTION_CONE_DECIDEGREES;

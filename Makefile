@@ -633,6 +633,7 @@ COMMON_SRC = \
             sensors/gyro.c \
             sensors/initialisation.c \
             uav_interconnect/uav_interconnect_bus.c \
+            uav_interconnect/uav_interconnect_rangefinder.c \
             $(CMSIS_SRC) \
             $(DEVICE_STDPERIPH_SRC)
 

@@ -240,9 +240,12 @@ static void uavInterconnectProcessSlot(void)
                 if (uavCalculateCRC(&slotDataBuffer[0], UIB_PACKET_SIZE + 2) == slotDataBuffer[UIB_PACKET_SIZE + 2]) {
                     // CRC valid - process valid READ slot
                     // Check if this slot has read capability and is allocated
-                    if (slots[slot].allocated && (slots[slot].deviceFlags & UIB_FLAG_HAS_READ) && !slots[slot].rxDataReady) {
-                        memcpy(slots[slot].rxPacket, &slotDataBuffer[2], UIB_PACKET_SIZE);
-                        slots[slot].rxDataReady = true;
+                    if (slots[slot].allocated && (slots[slot].deviceFlags & UIB_FLAG_HAS_READ)) {
+                        if (!slots[slot].rxDataReady) {
+                            memcpy(slots[slot].rxPacket, &slotDataBuffer[2], UIB_PACKET_SIZE);
+                            slots[slot].rxDataReady = true;
+                        }
+
                         slots[slot].unrepliedRequests = 0;
                     }
                 }
@@ -479,6 +482,8 @@ bool uibRead(uint8_t devId, uint8_t * buffer)
         return false;
 
     memcpy(buffer, devices[devId]->rxPacket, UIB_PACKET_SIZE);
+    devices[devId]->rxDataReady = false;
+
     return true;
 }
 
