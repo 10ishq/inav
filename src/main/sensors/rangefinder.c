@@ -23,6 +23,7 @@
 #include <platform.h>
 
 #include "build/build_config.h"
+#include "build/debug.h"
 
 #include "common/maths.h"
 #include "common/utils.h"
@@ -195,6 +196,9 @@ int32_t rangefinderRead(void)
 {
     if (rangefinder.dev.read) {
         const int32_t distance = rangefinder.dev.read(&rangefinder.dev);
+
+        DEBUG_SET(DEBUG_RANGEFINDER, 0, distance);
+
         if (distance >= 0) {
             rangefinder.lastValidResponseTimeMs = millis();
             rangefinder.rawAltitude = applyMedianFilter(distance);
@@ -213,6 +217,8 @@ int32_t rangefinderRead(void)
         rangefinder.rawAltitude = RANGEFINDER_OUT_OF_RANGE;
     }
 
+    DEBUG_SET(DEBUG_RANGEFINDER, 1, rangefinder.rawAltitude);
+
     return rangefinder.rawAltitude;
 }
 
@@ -230,6 +236,7 @@ int32_t rangefinderCalculateAltitude(int32_t rangefinderDistance, float cosTiltA
     } else {
         rangefinder.calculatedAltitude = rangefinderDistance * cosTiltAngle;
     }
+    DEBUG_SET(DEBUG_RANGEFINDER, 2, rangefinder.calculatedAltitude);
     return rangefinder.calculatedAltitude;
 }
 

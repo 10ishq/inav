@@ -100,7 +100,6 @@ int16_t headFreeModeHold;
 
 uint8_t motorControlEnable = false;
 
-int16_t telemTemperature1;      // gyro sensor temperature
 static uint32_t disarmAt;     // Time of automatic disarm when "Don't spin the motors when armed" is enabled and auto_disarm_delay is nonzero
 
 static bool isRXDataNew;
@@ -226,6 +225,17 @@ void annexCode(void)
     if (ARMING_FLAG(ARMED)) {
         LED0_ON;
     } else {
+        static bool calibratingFinishedBeep = false;
+        if (isCalibrating()) {
+            calibratingFinishedBeep = false;
+        }
+        else {
+            if (!calibratingFinishedBeep) {
+                calibratingFinishedBeep = true;
+                beeper(BEEPER_RUNTIME_CALIBRATION_DONE);
+            }
+        }
+
         if (!IS_RC_MODE_ACTIVE(BOXARM) && failsafeIsReceivingRxData()) {
             ENABLE_ARMING_FLAG(OK_TO_ARM);
         }

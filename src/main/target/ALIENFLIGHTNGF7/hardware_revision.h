@@ -14,24 +14,15 @@
  * You should have received a copy of the GNU General Public License
  * along with Cleanflight.  If not, see <http://www.gnu.org/licenses/>.
  */
-
 #pragma once
 
-typedef enum disarmReason_e {
-    DISARM_NONE         = 0,
-    DISARM_TIMEOUT      = 1,
-    DISARM_STICKS       = 2,
-    DISARM_SWITCH_3D    = 3,
-    DISARM_SWITCH       = 4,
-    DISARM_KILLSWITCH   = 5,
-    DISARM_FAILSAFE     = 6,
-    DISARM_NAVIGATION   = 7
-} disarmReason_t;
+typedef enum awf7HardwareRevision_t {
+    AFF7_UNKNOWN = 0,
+    AFF7_REV_1, // ICM-20602 (SPI), Current Sensor (ACS712), SDCard Reader
+    AFF7_REV_2  // ICM-20602 (SPI), OpenSky RX (CC2510), Current Sensor (ACS712), SDCard Reader
+} awf7HardwareRevision_e;
 
-void handleInflightCalibrationStickPosition();
+extern uint8_t hardwareRevision;
 
-void mwDisarm(disarmReason_t disarmReason);
-void mwArm(void);
-disarmReason_t getDisarmReason(void);
-
-bool isCalibrating(void);
+void updateHardwareRevision(void);
+void detectHardwareRevision(void);
