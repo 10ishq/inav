@@ -85,7 +85,6 @@
 #include "io/pwmdriver_i2c.h"
 #include "io/osd.h"
 #include "io/displayport_msp.h"
-#include "io/uav_interconnect.h"
 
 #include "msp/msp_serial.h"
 
@@ -120,6 +119,7 @@
 #include "config/parameter_group.h"
 #include "config/parameter_group_ids.h"
 
+#include "uav_interconnect/uav_interconnect.h"
 
 #ifdef USE_HARDWARE_REVISION_DETECTION
 #include "hardware_revision.h"
@@ -530,7 +530,7 @@ void init(void)
 #endif
 
 #ifdef USE_UAV_INTERCONNECT
-    uavInterconnectInit();
+    uavInterconnectBusInit();
 #endif
 
 #ifdef GPS

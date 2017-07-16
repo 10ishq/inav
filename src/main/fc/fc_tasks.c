@@ -54,7 +54,6 @@
 #include "io/osd.h"
 #include "io/pwmdriver_i2c.h"
 #include "io/serial.h"
-#include "io/uav_interconnect.h"
 
 #include "msp/msp_serial.h"
 
@@ -76,6 +75,8 @@
 #include "telemetry/telemetry.h"
 
 #include "config/feature.h"
+
+#include "uav_interconnect/uav_interconnect.h"
 
 /* VBAT monitoring interval (in microseconds) - 1s*/
 #define VBATINTERVAL (6 * 3500)
@@ -328,7 +329,7 @@ void fcTasksInit(void)
 #endif
 #endif
 #ifdef USE_UAV_INTERCONNECT
-    setTaskEnabled(TASK_UAV_INTERCONNECT, uavInterconnectIsInitialized());
+    setTaskEnabled(TASK_UAV_INTERCONNECT, uavInterconnectBusIsInitialized());
 #endif
 }
 
@@ -526,7 +527,7 @@ cfTask_t cfTasks[TASK_COUNT] = {
 #ifdef USE_UAV_INTERCONNECT
     [TASK_UAV_INTERCONNECT] = {
         .taskName = "UIB",
-        .taskFunc = uavInterconnectTask,
+        .taskFunc = uavInterconnectBusTask,
         .desiredPeriod = 1000000 / 200,          // 200 Hz
         .staticPriority = TASK_PRIORITY_MEDIUM,
     },

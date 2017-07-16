@@ -25,26 +25,24 @@
 
 #ifdef USE_UAV_INTERCONNECT
 
-#define UIB_DEV_COMPASS         0x08
+#define UIB_PACKET_SIZE 16
 
-#define UIB_DEV_BAROMETER       0x11
-#define UIB_DEV_RANGEFINDER     0x12
+typedef enum {
+    UIB_DATA_NONE           = 0,
+    UIB_DATA_VALID          = (1 << 0),     // Data is valid
+    UIB_DATA_NEW            = (1 << 1),     // Data has updated since last READ
+} uibDataFlags_t;
 
-#define UIB_DEV_GPS             0x20
-#define UIB_DEV_OPTICAL_FLOW    0x22
+/* Bus task */
+void uavInterconnectBusTask(timeUs_t currentTimeUs);
+void uavInterconnectBusInit(void);
+bool uavInterconnectBusIsInitialized(void);
 
-#define UIB_DEV_AIRSPEED        0x40
-
-#define UIB_DEV_RC_CONTROL      0x80
-#define UIB_DEV_REMOTE_STEERING 0x81    // Processed in special "ROBOT" flight mode
-
-void uavInterconnectTask(timeUs_t currentTimeUs);
-void uavInterconnectInit(void);
-bool uavInterconnectIsInitialized(void);
-
-bool uavInterconnect_DeviceDetected(uint8_t devId);
-timeUs_t uavInterconnect_GetPollRateUs(uint8_t devId);
-bool uavInterconnect_DataAvailable(uint8_t devId);
-bool uavInterconnect_Read(uint8_t devId, uint8_t * buffer);
+/* Bus device API */
+bool uibDeviceDetected(uint8_t devId);
+timeUs_t uibGetPollRateUs(uint8_t devId);
+uint32_t uibGetUnansweredRequests(uint8_t devId);
+bool uibDataAvailable(uint8_t devId);
+bool uibRead(uint8_t devId, uint8_t * buffer);
 
 #endif

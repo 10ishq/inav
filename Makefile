@@ -605,7 +605,6 @@ COMMON_SRC = \
             io/serial_4way_avrootloader.c \
             io/serial_4way_stk500v2.c \
             io/statusindicator.c \
-            io/uav_interconnect.c \
             msp/msp_serial.c \
             rx/ibus.c \
             rx/jetiexbus.c \
@@ -633,6 +632,7 @@ COMMON_SRC = \
             sensors/diagnostics.c \
             sensors/gyro.c \
             sensors/initialisation.c \
+            uav_interconnect/uav_interconnect_bus.c \
             $(CMSIS_SRC) \
             $(DEVICE_STDPERIPH_SRC)
 

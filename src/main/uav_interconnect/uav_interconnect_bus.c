@@ -39,8 +39,8 @@
 #include "drivers/time.h"
 
 #include "io/serial.h"
-#include "io/uav_interconnect.h"
 
+#include "uav_interconnect/uav_interconnect.h"
 
 typedef enum {
     UIB_COMMAND_IDENTIFY    = 0x00,
@@ -58,7 +58,6 @@ typedef enum {
 #define UIB_MAX_SLOTS           16
 #define UIB_BIT_RATE            115200
 #define UIB_PORT_OPTIONS        (SERIAL_NOT_INVERTED | SERIAL_STOPBITS_1 | SERIAL_PARITY_NO | SERIAL_UNIDIR)
-#define UIB_PACKET_SIZE         16
 
 #define UIB_DISCOVERY_DELAY_US  2000000 // 2 seconds from power-up to allow all devices to boot
 #define UIB_SLOT_INTERVAL_US    4900    // 4.9ms
@@ -71,6 +70,7 @@ typedef struct {
     uint16_t    deviceFlags;
     timeUs_t    pollIntervalUs;
     timeUs_t    lastPollTimeUs;
+    uint32_t    unrepliedRequests;      // 0 - all answered, 1 - request in progress, 2 or more - device failed to answer one or more requests
 
     bool        rxDataReady;
     bool        txDataReady;    
@@ -107,7 +107,7 @@ static timeUs_t                 refreshStartTimeUs;
 
 static uint8_t                  slotDataBuffer[20]; // Max transaction length is 20 bytes
 static int                      slotDataBufferCount;
-static timeUs_t                 responseLastByteTimeUs;
+static timeUs_t                 slotLastActivityUs;
 
 // Statistics
 static uavInterconnectStats_t   uibStats;
@@ -184,7 +184,7 @@ static int uavInterconnectFindEmptySlot(void)
     return -1;
 }
 
-static void uavInterconnectProcessSlot(timeUs_t currentTimeUs)
+static void uavInterconnectProcessSlot(void)
 {
     // First byte is command / slot
     uint8_t cmd = slotDataBuffer[0] & 0xC0;
@@ -203,6 +203,7 @@ static void uavInterconnectProcessSlot(timeUs_t currentTimeUs)
                         // This is a refresh - only update devFlags & pollInterval
                         slots[slot].deviceFlags = slotDataBuffer[5] << 8 | slotDataBuffer[6];
                         slots[slot].pollIntervalUs = (slotDataBuffer[3] << 8 | slotDataBuffer[4]) * 1000;
+                        slots[slot].unrepliedRequests = 0;
                     }
                     else {
                         slots[slot].allocated = true;
@@ -212,6 +213,7 @@ static void uavInterconnectProcessSlot(timeUs_t currentTimeUs)
                         slots[slot].rxDataReady = false;
                         slots[slot].txDataReady = false;
                         slots[slot].lastPollTimeUs = 0;
+                        slots[slot].unrepliedRequests = 0;
 
                         // Save pointer to slot to be able to address device by DevID internally
                         devices[slots[slot].deviceAddress] = &slots[slot];
@@ -241,6 +243,7 @@ static void uavInterconnectProcessSlot(timeUs_t currentTimeUs)
                     if (slots[slot].allocated && (slots[slot].deviceFlags & UIB_FLAG_HAS_READ) && !slots[slot].rxDataReady) {
                         memcpy(slots[slot].rxPacket, &slotDataBuffer[2], UIB_PACKET_SIZE);
                         slots[slot].rxDataReady = true;
+                        slots[slot].unrepliedRequests = 0;
                     }
                 }
                 else {
@@ -257,7 +260,13 @@ static void uavInterconnectProcessSlot(timeUs_t currentTimeUs)
         //      DEV:    ACK[1] + CRC2[1]
         case UIB_COMMAND_WRITE:
             if (slotDataBufferCount == (UIB_PACKET_SIZE + 4)) {
-                // Don't check for CRC at the moment - just receive the packet
+                if (uavCalculateCRC(&slotDataBuffer[0], UIB_PACKET_SIZE + 3) == slotDataBuffer[UIB_PACKET_SIZE + 3]) {
+                    slots[slot].unrepliedRequests = 0;
+                }
+                else {
+                    uibStats.failedCRC++;
+                }
+
                 // Regardless of CRC validity - discard buffer data
                 slotDataBufferCount = 0;
             }
@@ -287,6 +296,7 @@ static void uibProcessScheduledTransactions(timeUs_t currentTimeUs)
     // READ command
     if (slotId >= 0) {
         sendRead(currentTimeUs, slotId);
+        slots[slotId].unrepliedRequests++;
         slots[slotId].lastPollTimeUs = currentTimeUs;
         return;
     }
@@ -308,6 +318,7 @@ static void uibProcessScheduledTransactions(timeUs_t currentTimeUs)
     // WRITE command
     if (slotId >= 0) {
         sendWrite(currentTimeUs, slotId, slots[slotId].txPacket);
+        slots[slotId].unrepliedRequests++;
         slots[slotId].txDataReady = false;
         return;
     }
@@ -323,13 +334,13 @@ static void uibProcessScheduledTransactions(timeUs_t currentTimeUs)
     }
 }
 
-void uavInterconnectTask(timeUs_t currentTimeUs)
+void uavInterconnectBusTask(timeUs_t currentTimeUs)
 {
     if (!uibInitialized)
         return;
 
     // Flush receive buffer if guard interval elapsed
-    if ((currentTimeUs - responseLastByteTimeUs) >= UIB_GUARD_INTERVAL_US && slotDataBufferCount > 0) {
+    if ((currentTimeUs - slotLastActivityUs) >= UIB_GUARD_INTERVAL_US && slotDataBufferCount > 0) {
         uibStats.commandTimeouts++;
         slotDataBufferCount = 0;
     }
@@ -343,16 +354,16 @@ void uavInterconnectTask(timeUs_t currentTimeUs)
             hasNewBytes = true;
         }
 
-        responseLastByteTimeUs = currentTimeUs;
+        slotLastActivityUs = currentTimeUs;
     }
 
     // If we have new bytes - process packet
     if (hasNewBytes && slotDataBufferCount >= 7) {  // minimum transaction length is 7 bytes - no point in processing something smaller
-        uavInterconnectProcessSlot(currentTimeUs);
+        uavInterconnectProcessSlot();
     }
 
     // Process request scheduling - we can initiate another slot if guard interval has elapsed and slot interval has elapsed as well
-    bool canSendNewRequest = ((currentTimeUs - responseLastByteTimeUs) >= UIB_GUARD_INTERVAL_US) &&
+    bool canSendNewRequest = ((currentTimeUs - slotLastActivityUs) >= UIB_GUARD_INTERVAL_US) &&
                              ((currentTimeUs - slotStartTimeUs) >= UIB_SLOT_INTERVAL_US);
 
     if (!canSendNewRequest)
@@ -404,7 +415,7 @@ void uavInterconnectTask(timeUs_t currentTimeUs)
     */
 }
 
-void uavInterconnectInit(void)
+void uavInterconnectBusInit(void)
 {
     for (int i = 0; i < UIB_MAX_DEVICES; i++) {
         devices[i] = NULL;
@@ -422,12 +433,12 @@ void uavInterconnectInit(void)
     uibInitialized = true;
 }
 
-bool uavInterconnectIsInitialized(void)
+bool uavInterconnectBusIsInitialized(void)
 {
     return uibInitialized;
 }
 
-bool uavInterconnect_DeviceDetected(uint8_t devId)
+bool uibDeviceDetected(uint8_t devId)
 {
     if (!devices[devId])
         return false;
@@ -435,7 +446,7 @@ bool uavInterconnect_DeviceDetected(uint8_t devId)
     return devices[devId]->allocated;
 }
 
-timeUs_t uavInterconnect_GetPollRateUs(uint8_t devId)
+timeUs_t uibGetPollRateUs(uint8_t devId)
 {
     if (!devices[devId])
         return 0;
@@ -443,7 +454,15 @@ timeUs_t uavInterconnect_GetPollRateUs(uint8_t devId)
     return devices[devId]->pollIntervalUs;
 }
 
-bool uavInterconnect_DataAvailable(uint8_t devId)
+uint32_t uibGetUnansweredRequests(uint8_t devId)
+{
+    if (!devices[devId])
+        return 0;
+
+    return (devices[devId]->unrepliedRequests < 2) ? 0 : devices[devId]->unrepliedRequests - 1;
+}
+
+bool uibDataAvailable(uint8_t devId)
 {
     if (!devices[devId])
         return false;
@@ -451,7 +470,7 @@ bool uavInterconnect_DataAvailable(uint8_t devId)
     return devices[devId]->rxDataReady;
 }
 
-bool uavInterconnect_Read(uint8_t devId, uint8_t * buffer)
+bool uibRead(uint8_t devId, uint8_t * buffer)
 {
     if (!devices[devId])
         return false;
