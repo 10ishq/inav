@@ -68,6 +68,7 @@ typedef struct {
     bool        allocated;
     uint8_t     deviceAddress;
     uint16_t    deviceFlags;
+    uint8_t     devParams[4];
     timeUs_t    pollIntervalUs;
     timeUs_t    lastPollTimeUs;
     uint32_t    unrepliedRequests;      // 0 - all answered, 1 - request in progress, 2 or more - device failed to answer one or more requests
@@ -194,10 +195,10 @@ static void uavInterconnectProcessSlot(void)
     switch (cmd) {
         // Identify command (8 bytes)
         //      FC:     IDENTIFY[1] + DevID[1] + CRC1[1]
-        //      DEV:    PollInterval[2] + Flags[2] + CRC2[1]
+        //      DEV:    PollInterval[2] + Flags[2] + DevParams[4] + CRC2[1]
         case UIB_COMMAND_IDENTIFY:
-            if (slotDataBufferCount == 8) {
-                if (uavCalculateCRC(&slotDataBuffer[0], 7) == slotDataBuffer[7]) {
+            if (slotDataBufferCount == 12) {
+                if (uavCalculateCRC(&slotDataBuffer[0], 11) == slotDataBuffer[11]) {
                     // CRC valid - process valid IDENTIFY slot
                     if (slots[slot].allocated && (slots[slot].deviceAddress == slotDataBuffer[1])) {
                         // This is a refresh - only update devFlags & pollInterval
@@ -210,6 +211,10 @@ static void uavInterconnectProcessSlot(void)
                         slots[slot].deviceAddress = slotDataBuffer[1];
                         slots[slot].deviceFlags = slotDataBuffer[5] << 8 | slotDataBuffer[6];
                         slots[slot].pollIntervalUs = (slotDataBuffer[3] << 8 | slotDataBuffer[4]) * 1000;
+                        slots[slot].devParams[0] = slotDataBuffer[7];
+                        slots[slot].devParams[1] = slotDataBuffer[8];
+                        slots[slot].devParams[2] = slotDataBuffer[9];
+                        slots[slot].devParams[3] = slotDataBuffer[10];
                         slots[slot].rxDataReady = false;
                         slots[slot].txDataReady = false;
                         slots[slot].lastPollTimeUs = 0;
@@ -361,7 +366,7 @@ void uavInterconnectBusTask(timeUs_t currentTimeUs)
     }
 
     // If we have new bytes - process packet
-    if (hasNewBytes && slotDataBufferCount >= 7) {  // minimum transaction length is 7 bytes - no point in processing something smaller
+    if (hasNewBytes && slotDataBufferCount >= 12) {  // minimum transaction length is 12 bytes - no point in processing something smaller
         uavInterconnectProcessSlot();
     }
 
@@ -447,6 +452,18 @@ bool uibDeviceDetected(uint8_t devId)
         return false;
 
     return devices[devId]->allocated;
+}
+
+bool uibGetDeviceParams(uint8_t devId, uint8_t * params)
+{
+    if (!devices[devId] || !params)
+        return false;
+
+    params[0] = devices[devId]->devParams[0];
+    params[1] = devices[devId]->devParams[1];
+    params[2] = devices[devId]->devParams[2];
+    params[3] = devices[devId]->devParams[3];
+    return true;
 }
 
 timeUs_t uibGetPollRateUs(uint8_t devId)

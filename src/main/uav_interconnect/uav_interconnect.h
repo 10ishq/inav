@@ -41,6 +41,7 @@ bool uavInterconnectBusIsInitialized(void);
 
 /* Bus device API */
 bool uibDeviceDetected(uint8_t devId);
+bool uibGetDeviceParams(uint8_t devId, uint8_t * params);
 timeUs_t uibGetPollRateUs(uint8_t devId);
 uint32_t uibGetUnansweredRequests(uint8_t devId);
 bool uibDataAvailable(uint8_t devId);
