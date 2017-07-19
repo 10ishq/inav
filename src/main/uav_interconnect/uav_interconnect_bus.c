@@ -332,26 +332,28 @@ static void uibProcessScheduledTransactions(timeUs_t currentTimeUs)
     }
 
     // Neither READ nor WRITE command are queued - issue IDENTIFY once in a while
-    if (slots[refreshSlot].allocated && ((currentTimeUs - refreshStartTimeUs) > UIB_REFRESH_INTERVAL_US)) {
-        sendDiscover(currentTimeUs, refreshSlot, slots[refreshSlot].deviceAddress);
-        refreshStartTimeUs = currentTimeUs;
-    }
+    if ((currentTimeUs - refreshStartTimeUs) > UIB_REFRESH_INTERVAL_US) {
+        if (slots[refreshSlot].allocated) {
+            sendDiscover(currentTimeUs, refreshSlot, slots[refreshSlot].deviceAddress);
+            refreshStartTimeUs = currentTimeUs;
+        }
 
-    if (++refreshSlot >= UIB_MAX_SLOTS) {
-        refreshSlot = 0;
+        if (++refreshSlot >= UIB_MAX_SLOTS) {
+            refreshSlot = 0;
+        }
     }
+}
+
+static bool canSendNewRequest(timeUs_t currentTimeUs)
+{
+    return ((currentTimeUs - slotLastActivityUs) >= UIB_GUARD_INTERVAL_US) &&
+           ((currentTimeUs - slotStartTimeUs) >= UIB_SLOT_INTERVAL_US);
 }
 
 void uavInterconnectBusTask(timeUs_t currentTimeUs)
 {
     if (!uibInitialized)
         return;
-
-    // Flush receive buffer if guard interval elapsed
-    if ((currentTimeUs - slotLastActivityUs) >= UIB_GUARD_INTERVAL_US && slotDataBufferCount > 0) {
-        uibStats.commandTimeouts++;
-        slotDataBufferCount = 0;
-    }
 
     // Receive bytes to the buffer
     bool hasNewBytes = false;
@@ -365,55 +367,57 @@ void uavInterconnectBusTask(timeUs_t currentTimeUs)
         slotLastActivityUs = currentTimeUs;
     }
 
+    // Flush receive buffer if guard interval elapsed
+    if ((currentTimeUs - slotLastActivityUs) >= UIB_GUARD_INTERVAL_US && slotDataBufferCount > 0) {
+        uibStats.commandTimeouts++;
+        slotDataBufferCount = 0;
+    }
+
     // If we have new bytes - process packet
     if (hasNewBytes && slotDataBufferCount >= 12) {  // minimum transaction length is 12 bytes - no point in processing something smaller
         uavInterconnectProcessSlot();
     }
 
     // Process request scheduling - we can initiate another slot if guard interval has elapsed and slot interval has elapsed as well
-    bool canSendNewRequest = ((currentTimeUs - slotLastActivityUs) >= UIB_GUARD_INTERVAL_US) &&
-                             ((currentTimeUs - slotStartTimeUs) >= UIB_SLOT_INTERVAL_US);
+    if (canSendNewRequest(currentTimeUs)) {
+        // We get here only if we can send requests - no timeout checking should be done beyond this point
+        switch (busState) {
+            case STATE_INITIALIZE:
+                if ((currentTimeUs - slotStartTimeUs) > UIB_DISCOVERY_DELAY_US) {
+                    discoverySlot = 0;
+                    discoveryAddress = 0;
+                    switchState(STATE_DISCOVER);
+                }
+                break;
 
-    if (!canSendNewRequest)
-        return;
-
-    // We get here only if we can send requests - no timeout checking should be done beyond this point
-    switch (busState) {
-        case STATE_INITIALIZE:
-            if ((currentTimeUs - slotStartTimeUs) > UIB_DISCOVERY_DELAY_US) {
-                discoverySlot = 0;
-                discoveryAddress = 0;
-                switchState(STATE_DISCOVER);
-            }
-            break;
-
-        case STATE_DISCOVER:
-            if (discoverySlot >= 0) {
-                sendDiscover(currentTimeUs, discoverySlot, discoveryAddress);
-                if (discoveryAddress == 0xFF) {
-                    // All addresses have been polled
-                    switchState(STATE_IDLE);
+            case STATE_DISCOVER:
+                if (discoverySlot >= 0) {
+                    sendDiscover(currentTimeUs, discoverySlot, discoveryAddress);
+                    if (discoveryAddress == 0xFF) {
+                        // All addresses have been polled
+                        switchState(STATE_IDLE);
+                    }
+                    else {
+                        // Query next address and stick here
+                        discoveryAddress++;
+                    }
                 }
                 else {
-                    // Query next address and stick here
-                    discoveryAddress++;
+                    // All slots are allocated - can't discover more devices
+                    refreshSlot = 0;
+                    refreshStartTimeUs = currentTimeUs;
+                    switchState(STATE_IDLE);
                 }
-            }
-            else {
-                // All slots are allocated - can't discover more devices
-                refreshSlot = 0;
-                refreshStartTimeUs = currentTimeUs;
-                switchState(STATE_IDLE);
-            }
-            break;
+                break;
 
-        case STATE_IDLE:
-            // Find highest priority device and read/write it
-            // If no device is ready to be polled at the moment:
-            // issue IDENTIFY command for one of the existing devices. This will allow re-discovery of 
-            // temporary disconnected devices (due to device intermittent failure)
-            uibProcessScheduledTransactions(currentTimeUs);
-            break;
+            case STATE_IDLE:
+                // Find highest priority device and read/write it
+                // If no device is ready to be polled at the moment:
+                // issue IDENTIFY command for one of the existing devices. This will allow re-discovery of 
+                // temporary disconnected devices (due to device intermittent failure)
+                uibProcessScheduledTransactions(currentTimeUs);
+                break;
+        }
     }
 
     /*
@@ -437,7 +441,7 @@ void uavInterconnectBusInit(void)
     if (!busPort)
         return;
 
-    slotStartTimeUs = micros();
+    slotStartTimeUs = 0;
     uibInitialized = true;
 }
 

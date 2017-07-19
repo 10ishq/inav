@@ -35,6 +35,7 @@ typedef enum {
 } uibDataFlags_t;
 
 /* Bus task */
+bool uavInterconnectBusCheck(timeUs_t currentTimeUs, timeDelta_t currentDeltaTime);
 void uavInterconnectBusTask(timeUs_t currentTimeUs);
 void uavInterconnectBusInit(void);
 bool uavInterconnectBusIsInitialized(void);

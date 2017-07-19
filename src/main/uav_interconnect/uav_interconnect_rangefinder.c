@@ -43,7 +43,7 @@
 
 typedef struct __attribute__((packed)) {
     uint8_t flags;
-    uint32_t distanceCm;
+    uint16_t distanceCm;
 } rangefinderData_t;
 
 typedef union __attribute__((packed))  {

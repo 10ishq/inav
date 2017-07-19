@@ -528,8 +528,9 @@ cfTask_t cfTasks[TASK_COUNT] = {
 #ifdef USE_UAV_INTERCONNECT
     [TASK_UAV_INTERCONNECT] = {
         .taskName = "UIB",
+        //.checkFunc = uavInterconnectBusCheck,
         .taskFunc = uavInterconnectBusTask,
-        .desiredPeriod = 1000000 / 200,          // 200 Hz
+        .desiredPeriod = 1000000 / 500,          // 500 Hz
         .staticPriority = TASK_PRIORITY_MEDIUM,
     },
 #endif
